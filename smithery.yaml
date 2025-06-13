@@ -1,0 +1,48 @@
+name: panda-mcp
+version: 0.1.0
+description: A Model Context Protocol server for enhanced LLM planning and auditing capabilities
+
+# Deployment configuration
+deployment:
+  type: docker
+  image: ghcr.io/tanukimcp/panda:latest
+  port: 8000
+  healthcheck:
+    path: /health
+    interval: 30s
+    timeout: 10s
+    retries: 3
+
+# Environment variables
+env:
+  - name: LOG_LEVEL
+    value: INFO
+  - name: MAX_WORKERS
+    value: "4"
+
+# Resource requirements
+resources:
+  cpu: 1
+  memory: 1Gi
+
+# Scaling configuration
+scaling:
+  min_replicas: 1
+  max_replicas: 3
+  target_cpu_utilization: 80
+
+# Security configuration
+security:
+  allowedHosts:
+    - "*.smithery.ai"
+  cors:
+    enabled: true
+    origins:
+      - "https://*.smithery.ai"
+
+# Monitoring configuration
+monitoring:
+  enabled: true
+  metrics:
+    path: /metrics
+    port: 8000 
