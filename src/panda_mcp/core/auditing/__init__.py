@@ -15,6 +15,14 @@ from .checkers import (
     ConsistencyChecker,
     ComplianceChecker
 )
+from .patterns import (
+    AuditingPattern,
+    AuditingPatternType,
+    get_auditing_pattern,
+    register_auditing_pattern,
+    get_available_patterns,
+    get_patterns_by_category
+)
 
 __all__ = [
     "AuditingFramework",
@@ -26,5 +34,11 @@ __all__ = [
     "SecurityChecker",
     "QualityChecker",
     "ConsistencyChecker",
-    "ComplianceChecker"
+    "ComplianceChecker",
+    "AuditingPattern",
+    "AuditingPatternType",
+    "get_auditing_pattern",
+    "register_auditing_pattern",
+    "get_available_patterns",
+    "get_patterns_by_category"
 ] 
