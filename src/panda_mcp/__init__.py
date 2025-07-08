@@ -1,9 +1,15 @@
 """
-PandA - Planning and Auditing Model Context Protocol Server
+PandA MCP - Enhanced LLM planning and auditing capabilities with FastMCP.
 """
 
-__version__ = "0.1.0"
+from .mcp_server import get_server, mcp
+from .tools import PandaPlan, PandaAudit
 
-from .server import PandaServer
+__all__ = [
+    "get_server",
+    "mcp",
+    "PandaPlan", 
+    "PandaAudit"
+]
 
-__all__ = ["PandaServer"] 
+__version__ = "0.1.0" 

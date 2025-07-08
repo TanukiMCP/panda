@@ -1,251 +1,272 @@
 """
-PandA Plan - Planning tool implementation
+PandA Plan - Planning Framework Enhancement for LLMs
+
+This tool provides a single atomic interface that enhances LLM planning capabilities
+by offering structured frameworks and progress tracking. The LLM drives the process,
+and this tool provides the structure and guidance.
+
+Following MCP principles: LLM = DRIVER, Tool = VEHICLE
 """
 
 from typing import Any, Dict, List, Optional
-from pydantic import BaseModel, Field
-
-from ..core.planning import (
-    PlanningFramework,
-    SequentialPlanner,
-    MentalModelType
-)
-
-class PlanParameters(BaseModel):
-    """Parameters for the planning tool."""
-    
-    task: str = Field(..., description="The task to plan")
-    framework: str = Field("sequential", description="The planning framework to use")
-    mental_models: List[str] = Field(
-        default=["default"],
-        description="Mental models to apply in planning"
-    )
-    context: Optional[Dict[str, Any]] = Field(
-        default=None,
-        description="Additional context for planning"
-    )
+import re
+import json
+import os
+import importlib.util
+from pathlib import Path
 
 class PandaPlan:
-    """Planning tool for PandA MCP Server."""
+    """Single atomic planning tool that enhances LLM reasoning with structured frameworks."""
     
     def __init__(self):
-        """Initialize the planning tool."""
-        self._frameworks = {
-            "sequential": SequentialPlanner()
-        }
-        self._sessions = {}
+        """Initialize the planning tool by dynamically loading frameworks."""
+        self.frameworks = self._load_frameworks()
     
-    def get_available_frameworks(self) -> List[str]:
-        """Get list of available planning frameworks."""
-        return list(self._frameworks.keys())
+    def _load_frameworks(self) -> Dict[str, Any]:
+        """Dynamically load planning frameworks from the mental_models directory."""
+        frameworks = {}
+        models_dir = Path(__file__).parent.parent / "mental_models"
+        
+        for file_path in models_dir.glob("*.py"):
+            if file_path.name.startswith("__") or file_path.name == "base.py":
+                continue
+
+            module_name = file_path.stem
+            spec = importlib.util.spec_from_file_location(
+                f"panda_mcp.mental_models.{module_name}", file_path
+            )
+            if spec and spec.loader:
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                
+                # Framework name is the module name
+                framework_name = module_name
+                # The framework data is a variable with the same name
+                if hasattr(module, framework_name):
+                    frameworks[framework_name] = getattr(module, framework_name)
+        
+        return frameworks
     
-    def get_available_mental_models(self) -> List[str]:
-        """Get list of available mental models."""
-        return [model.value for model in MentalModelType]
-    
-    async def execute(
+    async def enhance_planning(
         self,
-        action: str,
-        session_id: Optional[str] = None,
-        parameters: Optional[Dict[str, Any]] = None,
+        thought: str,
+        framework: Optional[str] = None,
         context: Optional[Dict[str, Any]] = None,
-        result: Optional[Dict[str, Any]] = None,
-        step_action: Optional[str] = None
+        step_number: Optional[int] = None,
+        previous_steps: Optional[List[Dict[str, Any]]] = None
     ) -> Dict[str, Any]:
-        """Execute the planning tool with action-based interface.
+        """Enhance LLM planning with structured frameworks and progress tracking.
         
         Args:
-            action: The action to perform ('create_session', 'plan', 'advance_step', 'step_action', 'get_status')
-            session_id: The session ID (optional for create_session)
-            parameters: Action-specific parameters
-            context: Optional additional context from the MCP server
-            **kwargs: Additional action-specific arguments
+            thought: The LLM's current planning thought or question
+            framework: Optional framework to apply (first_principles, systems_thinking, etc.)
+            context: Optional additional context about the planning task
+            step_number: Optional current step number in a sequence
+            previous_steps: Optional list of previous planning steps
             
         Returns:
-            Dictionary containing the action result
+            Dictionary with framework guidance, structure, and progress tracking
         """
         try:
-            if action == "create_session":
-                return self._create_session(parameters or {})
+            result = {
+                "status": "success",
+                "thought_analysis": self._analyze_thought(thought),
+                "progress_tracking": self._track_progress(step_number, previous_steps),
+                "available_frameworks": list(self.frameworks.keys())
+            }
             
-            elif action == "plan":
-                if not session_id:
-                    return {"status": "error", "message": "session_id required for plan action"}
-                return await self._plan(session_id, parameters or {}, context)
-            
-            elif action == "advance_step":
-                if not session_id:
-                    return {"status": "error", "message": "session_id required for advance_step action"}
-                return await self._advance_step(session_id, result or {})
-            
-            elif action == "step_action":
-                if not session_id:
-                    return {"status": "error", "message": "session_id required for step_action action"}
-                return await self._step_action(session_id, step_action or "status", result)
-            
-            elif action == "get_status":
-                if not session_id:
-                    return {"status": "error", "message": "session_id required for get_status action"}
-                return self._get_status(session_id)
-            
+            # Apply specific framework if requested
+            if framework and framework in self.frameworks:
+                result["framework_guidance"] = self._apply_framework(framework, thought, context)
             else:
-                return {
-                    "status": "error",
-                    "message": f"Unknown action: {action}",
-                    "available_actions": ["create_session", "plan", "advance_step", "step_action", "get_status"]
-                }
+                # Suggest appropriate framework based on thought content
+                result["framework_suggestions"] = self._suggest_frameworks(thought)
+            
+            # Add context analysis if provided
+            if context:
+                result["context_analysis"] = self._analyze_context(context)
+            
+            return result
                 
         except Exception as e:
             return {
                 "status": "error",
-                "message": f"Planning action failed: {str(e)}"
+                "message": f"Planning enhancement failed: {str(e)}"
             }
     
-    def _create_session(self, parameters: Dict[str, Any]) -> Dict[str, Any]:
-        """Create a new planning session."""
-        import uuid
-        session_id = str(uuid.uuid4())
-        session_name = parameters.get("session_name", f"planning_session_{session_id[:8]}")
-        
-        self._sessions[session_id] = {
-            "session_id": session_id,
-            "session_name": session_name,
-            "framework": None,
-            "task": None,
-            "status": "created"
+    def _analyze_thought(self, thought: str) -> Dict[str, Any]:
+        """Analyze the LLM's thought to understand planning intent."""
+        analysis = {
+            "length": len(thought),
+            "complexity_indicators": [],
+            "planning_keywords": [],
+            "question_count": len(re.findall(r'\?', thought))
         }
         
-        return {
-            "status": "success",
-            "session_id": session_id,
-            "session_name": session_name,
-            "message": "Planning session created successfully"
-        }
-    
-    async def _plan(self, session_id: str, parameters: Dict[str, Any], context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-        """Execute planning for a session."""
-        # Validate parameters
-        params = PlanParameters(**parameters)
-        
-        # Get planning framework
-        framework = self._frameworks.get(params.framework)
-        if not framework:
-            return {
-                "status": "error",
-                "message": f"Unknown planning framework: {params.framework}",
-                "available_frameworks": self.get_available_frameworks()
-            }
-        
-        # Validate mental models
-        available_models = self.get_available_mental_models()
-        invalid_models = [
-            model for model in params.mental_models
-            if model not in available_models
+        # Detect complexity indicators
+        complexity_patterns = [
+            (r'\b(complex|complicated|difficult|challenging)\b', "complexity_mentioned"),
+            (r'\b(multiple|several|various|many)\b', "multiple_elements"),
+            (r'\b(depend|require|need|prerequisite)\b', "dependencies_mentioned"),
+            (r'\b(system|network|interconnect|relationship)\b', "systems_thinking_relevant"),
+            (r'\b(user|customer|stakeholder|people)\b', "human_centered"),
+            (r'\b(step|phase|stage|sequence)\b', "sequential_thinking")
         ]
-        if invalid_models:
-            return {
-                "status": "error",
-                "message": f"Unknown mental models: {invalid_models}",
-                "available_models": available_models
-            }
         
-        # Execute planning framework
-        result = await framework.plan(
-            session_id,
-            {
-                "task": params.task,
-                "mental_models": params.mental_models,
-                **(params.context or {})
-            },
-            context
-        )
+        for pattern, indicator in complexity_patterns:
+            if re.search(pattern, thought, re.IGNORECASE):
+                analysis["complexity_indicators"].append(indicator)
         
-        # Update session info
-        if result["status"] == "success":
-            session = self._sessions.get(session_id, {})
-            session.update({
-                "framework": params.framework,
-                "task": params.task,
-                "status": "planning_active"
-            })
-            self._sessions[session_id] = session
+        # Detect planning keywords
+        planning_patterns = [
+            (r'\b(plan|strategy|approach|method)\b', "planning"),
+            (r'\b(goal|objective|target|aim)\b', "goal_oriented"),
+            (r'\b(problem|issue|challenge|obstacle)\b', "problem_solving"),
+            (r'\b(analyze|understand|explore|investigate)\b', "analytical"),
+            (r'\b(create|build|develop|design)\b', "creative"),
+            (r'\b(improve|optimize|enhance|better)\b', "improvement")
+        ]
         
-        return result
+        for pattern, keyword in planning_patterns:
+            if re.search(pattern, thought, re.IGNORECASE):
+                analysis["planning_keywords"].append(keyword)
+        
+        return analysis
     
-    async def _advance_step(self, session_id: str, result: Dict[str, Any]) -> Dict[str, Any]:
-        """Advance to the next step in the plan."""
-        return await self.advance_plan(session_id, result)
+    def _suggest_frameworks(self, thought: str) -> List[Dict[str, Any]]:
+        """Suggest appropriate frameworks based on thought content."""
+        suggestions = []
+        
+        # Framework suggestion logic based on content analysis
+        framework_triggers = {
+            "first_principles": [
+                r'\b(fundamental|basic|core|essential|simple)\b',
+                r'\b(assumption|given|premise)\b',
+                r'\b(why|how|what if)\b'
+            ],
+            "systems_thinking": [
+                r'\b(system|network|interconnect|relationship|feedback)\b',
+                r'\b(stakeholder|component|element)\b',
+                r'\b(impact|effect|consequence|ripple)\b'
+            ],
+            "design_thinking": [
+                r'\b(user|customer|people|human|experience)\b',
+                r'\b(need|want|pain|problem|solution)\b',
+                r'\b(prototype|test|iterate|feedback)\b'
+            ],
+            "critical_path": [
+                r'\b(task|step|sequence|order|timeline)\b',
+                r'\b(depend|prerequisite|before|after)\b',
+                r'\b(bottleneck|constraint|limit)\b'
+            ],
+            "swot_analysis": [
+                r'\b(strength|weakness|opportunity|threat)\b',
+                r'\b(advantage|disadvantage|risk|benefit)\b',
+                r'\b(internal|external|competitive)\b'
+            ]
+        }
+        
+        for framework_name, patterns in framework_triggers.items():
+            score = 0
+            matched_patterns = []
+            
+            for pattern in patterns:
+                if re.search(pattern, thought, re.IGNORECASE):
+                    score += 1
+                    matched_patterns.append(pattern)
+            
+            if score > 0:
+                framework_info = self.frameworks[framework_name].copy()
+                framework_info["relevance_score"] = score
+                framework_info["matched_patterns"] = matched_patterns
+                framework_info["name"] = framework_name
+                suggestions.append(framework_info)
+        
+        # Sort by relevance score
+        suggestions.sort(key=lambda x: x["relevance_score"], reverse=True)
+        
+        return suggestions
     
-    async def _step_action(self, session_id: str, step_action: str, result: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-        """Execute a specific action for the current step."""
-        return await self.step_action(session_id, step_action, result=result)
+    def _apply_framework(self, framework: str, thought: str, context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """Apply a specific framework to enhance the planning thought."""
+        framework_info = self.frameworks[framework].copy()
+        
+        # Add framework application guidance
+        framework_info["application"] = {
+            "current_thought": thought,
+            "framework_lens": f"Viewing your thought through the {framework} framework",
+            "guided_questions": framework_info["questions"],
+            "structure_template": framework_info["structure"],
+            "next_steps_guidance": framework_info["next_steps"]
+        }
+        
+        # Add context-specific guidance if available
+        if context:
+            framework_info["context_integration"] = self._integrate_context_with_framework(framework, context)
+        
+        return framework_info
     
-    def _get_status(self, session_id: str) -> Dict[str, Any]:
-        """Get execution status for a session."""
-        return self.get_execution_status(session_id)
+    def _integrate_context_with_framework(self, framework: str, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Integrate context information with framework guidance."""
+        integration = {
+            "context_summary": context,
+            "framework_context_fit": f"How {framework} applies to your specific context"
+        }
+        
+        # Add context-specific guidance based on framework
+        if framework == "design_thinking" and "users" in context:
+            integration["user_focus"] = "Pay special attention to the user information in your context"
+        elif framework == "systems_thinking" and "stakeholders" in context:
+            integration["stakeholder_mapping"] = "Use the stakeholder information to map system relationships"
+        elif framework == "critical_path" and "timeline" in context:
+            integration["timeline_integration"] = "Consider the timeline constraints in your critical path analysis"
+        
+        return integration
     
-    async def advance_plan(self, session_id: str, result: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Advance to the next step in the plan."""
-        session = self._sessions.get(session_id)
-        if not session:
-            return {
-                "status": "error",
-                "message": "Invalid session ID"
-            }
+    def _track_progress(self, step_number: Optional[int], previous_steps: Optional[List[Dict[str, Any]]]) -> Dict[str, Any]:
+        """Track progress through a planning sequence."""
+        progress = {
+            "current_step": step_number or 1,
+            "has_previous_steps": bool(previous_steps),
+            "step_count": len(previous_steps) if previous_steps else 0
+        }
         
-        framework = self._frameworks.get(session["framework"])
-        if not framework:
-            return {
-                "status": "error",
-                "message": f"Unknown planning framework: {session['framework']}"
-            }
+        if previous_steps:
+            progress["previous_steps_summary"] = [
+                {
+                    "step": i + 1,
+                    "framework_used": step.get("framework"),
+                    "key_insight": step.get("insight", "No insight recorded")[:100]
+                }
+                for i, step in enumerate(previous_steps[-5:])  # Last 5 steps
+            ]
+            
+            # Analyze progress patterns
+            frameworks_used = [step.get("framework") for step in previous_steps if step.get("framework")]
+            if frameworks_used:
+                progress["framework_diversity"] = len(set(frameworks_used))
+                progress["most_used_framework"] = max(set(frameworks_used), key=frameworks_used.count)
         
-        return await framework.advance(session_id, result)
+        return progress
     
-    async def step_action(self, session_id: str, action: str, result: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Execute a specific action for the current step."""
-        session = self._sessions.get(session_id)
-        if not session:
-            return {
-                "status": "error",
-                "message": "Invalid session ID"
-            }
+    def _analyze_context(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Analyze provided context for planning relevance."""
+        analysis = {
+            "context_keys": list(context.keys()),
+            "context_complexity": len(context),
+            "planning_relevant_elements": []
+        }
         
-        framework = self._frameworks.get(session["framework"])
-        if not framework:
-            return {
-                "status": "error",
-                "message": f"Unknown planning framework: {session['framework']}"
-            }
+        # Identify planning-relevant context elements
+        relevant_keys = [
+            "goals", "objectives", "constraints", "timeline", "resources",
+            "stakeholders", "users", "requirements", "dependencies", "risks"
+        ]
         
-        if hasattr(framework, 'step_action'):
-            return await framework.step_action(session_id, action, result=result)
-        else:
-            return {
-                "status": "error",
-                "message": "Framework does not support step actions"
-            }
-    
-    def get_execution_status(self, session_id: str) -> Dict[str, Any]:
-        """Get execution status for a session."""
-        session = self._sessions.get(session_id)
-        if not session:
-            return {
-                "status": "error",
-                "message": "Invalid session ID"
-            }
+        for key in context.keys():
+            if any(relevant in key.lower() for relevant in relevant_keys):
+                analysis["planning_relevant_elements"].append(key)
         
-        framework = self._frameworks.get(session["framework"])
-        if not framework:
-            return {
-                "status": "error",
-                "message": f"Unknown planning framework: {session['framework']}"
-            }
-        
-        if hasattr(framework, 'get_execution_status'):
-            return framework.get_execution_status(session_id)
-        else:
-            return {
-                "status": "error",
-                "message": "Framework does not support execution status"
-            } 
+        return analysis
+
+# Tool class is ready for instantiation by the FastMCP server 
